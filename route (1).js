@@ -20,8 +20,19 @@ export async function POST(request) {
   if (!isValidUsername(username)) return Response.json({ error: "اسم المستخدم من 3 إلى 20 حرفًا (حروف وأرقام و _ . -) بدون مسافات." }, { status: 400 });
   if (password.length < 8 || password.length > 72) return Response.json({ error: "كلمة المرور من 8 إلى 72 حرفًا." }, { status: 400 });
 
-  const admin = getSupabaseAdmin();
-  const { data: taken } = await admin.from("usernames").select("user_id").eq("username_lower", username).maybeSingle();
+  let admin;
+  try {
+    admin = getSupabaseAdmin();
+  } catch {
+    return Response.json({ error: "إعدادات الخادم ناقصة: أضف SUPABASE_SERVICE_ROLE_KEY (و NEXT_PUBLIC_SUPABASE_URL) في Vercel ثم أعد النشر." }, { status: 500 });
+  }
+  const { data: taken, error: lookupError } = await admin.from("usernames").select("user_id").eq("username_lower", username).maybeSingle();
+  if (lookupError) {
+    console.error("usernames lookup failed:", lookupError.message);
+    const noTable = /relation|does not exist|schema cache/i.test(lookupError.message || "");
+    const badKey = /invalid api key|jwt|apikey/i.test(lookupError.message || "");
+    return Response.json({ error: noTable ? "جدول usernames غير موجود: شغّل ملف supabase-setup.sql في Supabase." : badKey ? "مفتاح SUPABASE_SERVICE_ROLE_KEY غير صحيح: انسخ مفتاح service_role من Supabase." : "تعذّر الاتصال بقاعدة البيانات: تأكد من رابط Supabase والمفاتيح." }, { status: 500 });
+  }
   if (taken) return Response.json({ error: "اسم المستخدم مستخدم، اختر اسمًا آخر." }, { status: 409 });
 
   const loginEmail = `u${crypto.randomBytes(12).toString("hex")}@${EMAIL_DOMAIN}`;
@@ -29,8 +40,10 @@ export async function POST(request) {
     email: loginEmail, password, email_confirm: true, user_metadata: { name },
   });
   if (createError || !created?.user) {
-    console.error("createUser failed:", createError?.message);
-    return Response.json({ error: "تعذّر إنشاء الحساب. حاول مرة أخرى." }, { status: 500 });
+    const msg = createError?.message || "";
+    console.error("createUser failed:", msg);
+    const badKey = /invalid api key|jwt|not allowed|apikey/i.test(msg);
+    return Response.json({ error: badKey ? "مفتاح SUPABASE_SERVICE_ROLE_KEY غير صحيح: انسخ مفتاح service_role (وليس anon) من Supabase." : "تعذّر إنشاء الحساب: " + (msg || "خطأ غير معروف") }, { status: 500 });
   }
 
   const { error: mapError } = await admin.from("usernames").insert({

@@ -1,12 +1,20 @@
 "use client";
 import { createClient } from "@supabase/supabase-js";
 
-// قيم بديلة تمنع انهيار البناء إذا نُسيت المتغيرات؛ التطبيق لن يعمل فعليًا بدون القيم الحقيقية
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.co";
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "placeholder-anon-key";
+const FALLBACK_URL = "https://placeholder.supabase.co";
 
-if (typeof window !== "undefined" && !process.env.NEXT_PUBLIC_SUPABASE_URL) {
-  console.error("متغيرات Supabase غير مضافة: أضف NEXT_PUBLIC_SUPABASE_URL و NEXT_PUBLIC_SUPABASE_ANON_KEY ثم أعد النشر.");
+// ننظف القيمة (مسافات/علامات اقتباس/شرطة أخيرة) ونتأكد أنها رابط صحيح، وإلا نستخدم قيمة مؤقتة كي لا ينهار البناء
+function cleanUrl(raw) {
+  const v = String(raw || "").trim().replace(/^["']|["']$/g, "").replace(/\/+$/, "");
+  return /^https?:\/\/[^\s]+$/i.test(v) ? v : "";
+}
+
+const rawUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseUrl = cleanUrl(rawUrl) || FALLBACK_URL;
+const supabaseAnonKey = String(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "").trim() || "placeholder-anon-key";
+
+if (typeof window !== "undefined" && supabaseUrl === FALLBACK_URL) {
+  console.error("NEXT_PUBLIC_SUPABASE_URL غير صحيح أو ناقص. يجب أن يكون مثل https://xxxx.supabase.co ثم أعد النشر.");
 }
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
