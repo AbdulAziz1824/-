@@ -11,7 +11,8 @@ export async function POST(request) {
   const body = await request.json().catch(() => ({}));
   const username = normalizeUsername(body.username);
   if (!isValidUsername(username)) return Response.json({ error: "غير موجود" }, { status: 404 });
-  const admin = getSupabaseAdmin();
+  let admin;
+  try { admin = getSupabaseAdmin(); } catch { return Response.json({ error: "إعدادات الخادم ناقصة" }, { status: 500 }); }
   const { data } = await admin.from("usernames").select("login_email").eq("username_lower", username).maybeSingle();
   if (!data) return Response.json({ error: "غير موجود" }, { status: 404 });
   return Response.json({ email: data.login_email });
