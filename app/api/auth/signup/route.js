@@ -5,7 +5,6 @@ import { rateLimit, clientIp, tooMany } from "@/lib/rateLimit";
 
 export const dynamic = "force-dynamic";
 
-// إنشاء حساب باسم مستخدم (بدون بريد حقيقي): نولّد بريدًا داخليًا عشوائيًا ونربطه باسم المستخدم
 const EMAIL_DOMAIN = process.env.USERNAME_EMAIL_DOMAIN || "gmail.com";
 
 export async function POST(request) {
@@ -20,8 +19,19 @@ export async function POST(request) {
   if (!isValidUsername(username)) return Response.json({ error: "اسم المستخدم من 3 إلى 20 حرفًا (حروف وأرقام و _ . -) بدون مسافات." }, { status: 400 });
   if (password.length < 8 || password.length > 72) return Response.json({ error: "كلمة المرور من 8 إلى 72 حرفًا." }, { status: 400 });
 
-  const admin = getSupabaseAdmin();
-  const { data: taken } = await admin.from("usernames").select("user_id").eq("username_lower", username).maybeSingle();
+  let admin;
+  try {
+    admin = getSupabaseAdmin();
+  } catch {
+    return Response.json({ error: "إعدادات الخادم ناقصة: أضف SUPABASE_SERVICE_ROLE_KEY في Vercel ثم أعد النشر." }, { status: 500 });
+  }
+
+  const { data: taken, error: lookupError } = await admin
+    .from("usernames").select("user_id").eq("username_lower", username).maybeSingle();
+  if (lookupError) {
+    console.error("usernames lookup failed:", lookupError.message);
+    return Response.json({ error: "خطأ في قاعدة البيانات: " + lookupError.message }, { status: 500 });
+  }
   if (taken) return Response.json({ error: "اسم المستخدم مستخدم، اختر اسمًا آخر." }, { status: 409 });
 
   const loginEmail = `u${crypto.randomBytes(12).toString("hex")}@${EMAIL_DOMAIN}`;
@@ -29,20 +39,4 @@ export async function POST(request) {
     email: loginEmail, password, email_confirm: true, user_metadata: { name },
   });
   if (createError || !created?.user) {
-    console.error("createUser failed:", createError?.message);
-    return Response.json({ error: "تعذّر إنشاء الحساب. حاول مرة أخرى." }, { status: 500 });
-  }
-
-  const { error: mapError } = await admin.from("usernames").insert({
-    user_id: created.user.id, username, username_lower: username, login_email: loginEmail,
-  });
-  if (mapError) {
-    await admin.auth.admin.deleteUser(created.user.id);
-    const dup = mapError.code === "23505";
-    return Response.json(
-      { error: dup ? "اسم المستخدم مستخدم، اختر اسمًا آخر." : "تعذّر إنشاء الحساب. تأكد من تشغيل ملف supabase-setup.sql." },
-      { status: dup ? 409 : 500 }
-    );
-  }
-  return Response.json({ success: true, email: loginEmail });
-}
+    const msg = createError?.message
