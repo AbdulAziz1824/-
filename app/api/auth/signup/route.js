@@ -1,5 +1,3 @@
-
-Route · JS
 import crypto from "crypto";
 import { getSupabaseAdmin } from "@/lib/supabaseAdmin";
 import { normalizeUsername, isValidUsername } from "@/lib/username";
