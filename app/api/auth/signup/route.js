@@ -31,7 +31,7 @@ export async function POST(request) {
     console.error("usernames lookup failed:", lookupError.message);
     const noTable = /relation|does not exist|schema cache/i.test(lookupError.message || "");
     const badKey = /invalid api key|jwt|apikey/i.test(lookupError.message || "");
-    return Response.json({ error: noTable ? "جدول usernames غير موجود: شغّل ملف supabase-setup.sql في Supabase." : badKey ? "مفتاح SUPABASE_SERVICE_ROLE_KEY غير صحيح: انسخ مفتاح service_role من Supabase." : "تعذّر الاتصال بقاعدة البيانات: تأكد من رابط Supabase والمفاتيح." }, { status: 500 });
+    return Response.json({ error: noTable ? "جدول usernames غير موجود: شغّل ملف supabase-setup.sql في Supabase." : badKey ? "مفتاح SUPABASE_SERVICE_ROLE_KEY غير صحيح: انسخ مفتاح service_role من Supabase." : "تعذّر الاتصال بقاعدة البيانات: تأكد من رابط Supabase والمفاتيح. (التفاصيل: " + (lookupError.message || "fetch failed") + ")" }, { status: 500 });
   }
   if (taken) return Response.json({ error: "اسم المستخدم مستخدم، اختر اسمًا آخر." }, { status: 409 });
 
