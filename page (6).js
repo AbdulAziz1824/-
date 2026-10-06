@@ -5,59 +5,42 @@ import { useAuth } from "@/components/AuthProvider";
 import { useUI } from "@/components/UIProvider";
 import { useRefresh } from "@/components/RefreshProvider";
 import ConfirmModal from "@/components/ConfirmModal";
-import { formatStamp } from "@/lib/format";
+import { dayLabel, formatDate, daysFromToday } from "@/lib/format";
 
-const COLORS = [
-  { key: "none", label: "بدون" },
-  { key: "green", label: "أخضر" },
-  { key: "yellow", label: "أصفر" },
-  { key: "red", label: "أحمر" },
-  { key: "blue", label: "أزرق" },
-  { key: "purple", label: "بنفسجي" },
-];
+const PRIORITY = { high: "عالية", medium: "متوسطة", low: "منخفضة" };
+const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
 
-export default function NotesPage() {
+export default function TasksPage() {
   const { user } = useAuth();
   const { showLoading, hideLoading, showToast } = useUI();
   const { registerHandler } = useRefresh();
 
-  const [notes, setNotes] = useState([]);
+  const [tasks, setTasks] = useState([]);
   const [loaded, setLoaded] = useState(false);
-  const [search, setSearch] = useState("");
-  const [activeTag, setActiveTag] = useState("");
+  const [filter, setFilter] = useState("open");
+  const [quick, setQuick] = useState("");
   const [showModal, setShowModal] = useState(false);
   const [editId, setEditId] = useState(null);
   const [title, setTitle] = useState("");
-  const [content, setContent] = useState("");
-  const [color, setColor] = useState("none");
-  const [pinned, setPinned] = useState(false);
-  const [tags, setTags] = useState([]);
-  const [tagInput, setTagInput] = useState("");
+  const [priority, setPriority] = useState("medium");
+  const [dueDate, setDueDate] = useState("");
+  const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(null);
 
-  const loadNotes = useCallback(async () => {
+  const load = useCallback(async () => {
     if (!user) return;
-    const { data } = await supabase.from("notes").select("*").eq("user_id", user.id)
-      .order("pinned", { ascending: false }).order("updated_at", { ascending: false });
-    setNotes(data || []);
+    const { data } = await supabase.from("tasks").select("*").eq("user_id", user.id);
+    setTasks(data || []);
     setLoaded(true);
   }, [user]);
 
-  useEffect(() => { loadNotes(); }, [loadNotes]);
-  useEffect(() => registerHandler(loadNotes), [registerHandler, loadNotes]);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => registerHandler(load), [registerHandler, load]);
 
-  function openAdd() {
-    setEditId(null); setTitle(""); setContent(""); setColor("none"); setPinned(false); setTags([]); setTagInput("");
-    setShowModal(true);
-  }
-  function openEdit(n) {
-    setEditId(n.id); setTitle(n.title || ""); setContent(n.content || ""); setColor(n.color || "none");
-    setPinned(!!n.pinned); setTags(n.tags || []); setTagInput("");
-    setShowModal(true);
-  }
+  function openAdd() { setEditId(null); setTitle(""); setPriority("medium"); setDueDate(""); setError(""); setShowModal(true); }
+  function openEdit(t) { setEditId(t.id); setTitle(t.title); setPriority(t.priority); setDueDate(t.due_date || ""); setError(""); setShowModal(true); }
 
-  // فتح نافذة الإضافة من الاختصارات في الرئيسية (?new=1)
   useEffect(() => {
     if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("new") === "1") {
       openAdd();
@@ -65,144 +48,143 @@ export default function NotesPage() {
     }
   }, []);
 
-  function addTag(raw) {
-    const t = (raw || "").trim().replace(/^#/, "");
+  // إضافة سريعة: اكتب المهمة واضغط Enter
+  async function handleQuickAdd(e) {
+    e.preventDefault();
+    const t = quick.trim();
     if (!t) return;
-    setTags((prev) => (prev.includes(t) || prev.length >= 10 ? prev : [...prev, t]));
-    setTagInput("");
+    setQuick("");
+    const { error: err } = await supabase.from("tasks").insert({ user_id: user.id, title: t, priority: "medium" });
+    if (err) { showToast("حدث خطأ أثناء الإضافة.", "error"); setQuick(t); return; }
+    load();
   }
-  function onTagKeyDown(e) {
-    if (e.key === "Enter" || e.key === "," || e.key === "،") { e.preventDefault(); addTag(tagInput); }
-    else if (e.key === "Backspace" && !tagInput && tags.length) setTags((prev) => prev.slice(0, -1));
+
+  async function toggleDone(t) {
+    const done = !t.done;
+    // تحديث فوري في الواجهة
+    setTasks((cur) => cur.map((x) => (x.id === t.id ? { ...x, done } : x)));
+    const { error: err } = await supabase.from("tasks")
+      .update({ done, completed_at: done ? new Date().toISOString() : null })
+      .eq("id", t.id).eq("user_id", user.id);
+    if (err) { showToast("حدث خطأ.", "error"); load(); }
   }
 
   async function handleSubmit(e) {
     e.preventDefault();
     if (submitting) return;
-    if (!title.trim() && !content.trim()) { showToast("اكتب عنوانًا أو نصًا للملاحظة.", "error"); return; }
+    setError("");
+    if (!title.trim()) { setError("الرجاء كتابة المهمة."); return; }
     setSubmitting(true);
     showLoading();
-    const pending = tagInput.trim().replace(/^#/, "");
-    const finalTags = pending && !tags.includes(pending) ? [...tags, pending] : tags;
-    const payload = { title: title.trim() || null, content: content.trim(), color, pinned, tags: finalTags };
-    let error;
-    if (editId) {
-      ({ error } = await supabase.from("notes").update({ ...payload, updated_at: new Date().toISOString() }).eq("id", editId).eq("user_id", user.id));
-    } else {
-      ({ error } = await supabase.from("notes").insert({ ...payload, user_id: user.id }));
-    }
+    const payload = { title: title.trim(), priority, due_date: dueDate || null };
+    let err;
+    if (editId) ({ error: err } = await supabase.from("tasks").update(payload).eq("id", editId).eq("user_id", user.id));
+    else ({ error: err } = await supabase.from("tasks").insert({ ...payload, user_id: user.id }));
     hideLoading();
     setSubmitting(false);
-    if (error) { showToast("حدث خطأ أثناء الحفظ.", "error"); return; }
-    showToast(editId ? "تم تعديل الملاحظة." : "تمت إضافة الملاحظة.", "success");
+    if (err) { setError("حدث خطأ أثناء الحفظ."); return; }
+    showToast(editId ? "تم تعديل المهمة." : "تمت إضافة المهمة.", "success");
     setShowModal(false);
-    loadNotes();
-  }
-
-  async function togglePin(n) {
-    const { error } = await supabase.from("notes").update({ pinned: !n.pinned }).eq("id", n.id).eq("user_id", user.id);
-    if (error) { showToast("حدث خطأ.", "error"); return; }
-    loadNotes();
+    load();
   }
 
   async function handleDelete() {
     if (!confirmDelete) return;
     showLoading();
-    const { error } = await supabase.from("notes").delete().eq("id", confirmDelete.id).eq("user_id", user.id);
+    const { error: err } = await supabase.from("tasks").delete().eq("id", confirmDelete.id).eq("user_id", user.id);
     hideLoading();
     setConfirmDelete(null);
-    if (error) { showToast("حدث خطأ أثناء الحذف.", "error"); return; }
-    showToast("تم حذف الملاحظة.", "success");
-    loadNotes();
+    if (err) { showToast("حدث خطأ أثناء الحذف.", "error"); return; }
+    showToast("تم حذف المهمة.", "success");
+    load();
   }
 
-  const allTags = useMemo(() => Array.from(new Set(notes.flatMap((n) => n.tags || []))), [notes]);
-  const visible = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return notes.filter((n) => {
-      if (activeTag && !(n.tags || []).includes(activeTag)) return false;
-      if (!q) return true;
-      return (n.title || "").toLowerCase().includes(q) || (n.content || "").toLowerCase().includes(q);
+  async function clearDone() {
+    showLoading();
+    const { error: err } = await supabase.from("tasks").delete().eq("user_id", user.id).eq("done", true);
+    hideLoading();
+    if (err) { showToast("حدث خطأ.", "error"); return; }
+    showToast("تم حذف المهام المنجزة.", "success");
+    load();
+  }
+
+  const { open, done } = useMemo(() => {
+    const o = tasks.filter((t) => !t.done).sort((a, b) => {
+      const p = PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
+      if (p) return p;
+      if (a.due_date && b.due_date) return a.due_date.localeCompare(b.due_date);
+      return a.due_date ? -1 : b.due_date ? 1 : 0;
     });
-  }, [notes, search, activeTag]);
+    const d = tasks.filter((t) => t.done).sort((a, b) => (b.completed_at || "").localeCompare(a.completed_at || ""));
+    return { open: o, done: d };
+  }, [tasks]);
+  const list = filter === "open" ? open : done;
 
   return (
     <>
       <div className="section-header">
-        <h3>📝 ملاحظاتي</h3>
-        <button className="btn btn-primary btn-sm" onClick={openAdd}>+ إضافة ملاحظة</button>
+        <h3>✅ مهامي</h3>
+        <button className="btn btn-primary btn-sm" onClick={openAdd}>+ إضافة مهمة</button>
       </div>
 
-      <div className="filters-bar">
-        <input type="search" placeholder="ابحث في الملاحظات..." value={search} onChange={(e) => setSearch(e.target.value)} />
-        {allTags.length > 0 && (
-          <select value={activeTag} onChange={(e) => setActiveTag(e.target.value)} aria-label="التاغ">
-            <option value="">كل التاغات</option>
-            {allTags.map((t) => <option key={t} value={t}>#{t}</option>)}
-          </select>
+      <form className="quick-add" onSubmit={handleQuickAdd}>
+        <input type="text" placeholder="اكتب مهمة جديدة واضغط Enter..." value={quick} onChange={(e) => setQuick(e.target.value)} maxLength={200} />
+      </form>
+
+      <div className="tags-bar">
+        <button className={"tag-chip" + (filter === "open" ? " active" : "")} onClick={() => setFilter("open")}>المتبقية ({open.length})</button>
+        <button className={"tag-chip" + (filter === "done" ? " active" : "")} onClick={() => setFilter("done")}>المنجزة ({done.length})</button>
+        {filter === "done" && done.length > 0 && <button className="tag-chip" onClick={clearDone}>🗑️ حذف المنجزة</button>}
+      </div>
+
+      <div className="task-list">
+        {loaded && list.length === 0 && (
+          <div className="empty-state">{filter === "open" ? "لا توجد مهام متبقية. 🎉" : "لا توجد مهام منجزة بعد."}</div>
         )}
-      </div>
-
-      <div className="notes-grid">
-        {loaded && notes.length === 0 && <div className="empty-state" style={{ gridColumn: "1/-1" }}>لا توجد ملاحظات بعد. أضف ملاحظتك الأولى!</div>}
-        {notes.length > 0 && visible.length === 0 && <div className="empty-state" style={{ gridColumn: "1/-1" }}>لا توجد نتائج مطابقة.</div>}
-        {visible.map((n) => (
-          <div key={n.id} className={"note-card c-" + (n.color || "none")}>
-            {n.title && <div className="note-title">{n.pinned ? "📌 " : ""}{n.title}</div>}
-            {!n.title && n.pinned && <div className="note-title">📌</div>}
-            {(n.tags || []).length > 0 && (
-              <div className="note-tags">
-                {n.tags.map((t) => <span key={t} className="tag-chip small" onClick={() => setActiveTag(t)}>#{t}</span>)}
+        {list.map((t) => {
+          const late = !t.done && t.due_date && daysFromToday(t.due_date) < 0;
+          return (
+            <div key={t.id} className={"task-row" + (t.done ? " done" : "")}>
+              <button className={"task-check" + (t.done ? " checked" : "")} onClick={() => toggleDone(t)} aria-label={t.done ? "إلغاء الإنجاز" : "تم الإنجاز"}>
+                {t.done ? "✓" : ""}
+              </button>
+              <div className="task-main">
+                <div className="task-title">{t.title}</div>
+                {t.due_date && (
+                  <div className={"task-meta" + (late ? " late" : "")}>
+                    📅 {formatDate(t.due_date)} · {dayLabel(t.due_date)}{late ? " (متأخرة)" : ""}
+                  </div>
+                )}
               </div>
-            )}
-            {n.content && <div className="note-text">{n.content}</div>}
-            <div className="note-date">🕒 {formatStamp(n.updated_at || n.created_at)}</div>
-            <div className="note-actions">
-              <button onClick={() => togglePin(n)}>{n.pinned ? "إلغاء التثبيت" : "📌 تثبيت"}</button>
-              <button onClick={() => openEdit(n)}>✏️ تعديل</button>
-              <button onClick={() => setConfirmDelete(n)}>🗑️ حذف</button>
+              <span className={"badge prio-" + t.priority}>{PRIORITY[t.priority]}</span>
+              <div className="row-actions">
+                <button onClick={() => openEdit(t)} title="تعديل">✏️</button>
+                <button onClick={() => setConfirmDelete(t)} title="حذف">🗑️</button>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {showModal && (
         <div className="modal-overlay" onClick={() => setShowModal(false)}>
           <div className="modal-box" onClick={(e) => e.stopPropagation()}>
-            <h3>{editId ? "تعديل الملاحظة" : "إضافة ملاحظة"}</h3>
+            <h3>{editId ? "تعديل المهمة" : "إضافة مهمة جديدة"}</h3>
             <form onSubmit={handleSubmit}>
-              <div className="field"><label>العنوان (اختياري)</label><input type="text" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={100} /></div>
-              <div className="field"><label>النص</label><textarea style={{ minHeight: 140 }} value={content} onChange={(e) => setContent(e.target.value)} autoFocus /></div>
+              <div className="field"><label>المهمة</label><input type="text" value={title} onChange={(e) => setTitle(e.target.value)} maxLength={200} required autoFocus /></div>
               <div className="field">
-                <label>اللون</label>
-                <div className="color-picker">
-                  {COLORS.map((c) => (
-                    <button key={c.key} type="button" title={c.label} aria-label={c.label}
-                      className={"color-dot c-" + c.key + (color === c.key ? " selected" : "")}
-                      onClick={() => setColor(c.key)} />
+                <label>الأولوية</label>
+                <div className="checkbox-chip-group">
+                  {Object.keys(PRIORITY).map((k) => (
+                    <div className="checkbox-chip" key={k}>
+                      <input type="radio" name="priority" id={`prio-${k}`} checked={priority === k} onChange={() => setPriority(k)} />
+                      <label htmlFor={`prio-${k}`}>{PRIORITY[k]}</label>
+                    </div>
                   ))}
                 </div>
               </div>
-              <div className="field">
-                <label>التاغات (اختياري)</label>
-                <div className="tag-input-box">
-                  {tags.map((t) => (
-                    <span key={t} className="tag-chip small">#{t}
-                      <button type="button" className="tag-remove" onClick={() => setTags((p) => p.filter((x) => x !== t))} aria-label="حذف التاغ">×</button>
-                    </span>
-                  ))}
-                  <input type="text" value={tagInput} onChange={(e) => setTagInput(e.target.value)} onKeyDown={onTagKeyDown} onBlur={() => addTag(tagInput)} placeholder={tags.length ? "" : "اكتب تاغ واضغط Enter"} />
-                </div>
-              </div>
-              <div className="field">
-                <div className="toggle-row">
-                  <span>📌 تثبيت في الأعلى</span>
-                  <label className="toggle-switch">
-                    <input type="checkbox" checked={pinned} onChange={(e) => setPinned(e.target.checked)} />
-                    <span className="toggle-slider" />
-                  </label>
-                </div>
-              </div>
+              <div className="field"><label>تاريخ الاستحقاق (اختياري)</label><input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></div>
+              <div className="error-text">{error}</div>
               <div className="modal-actions">
                 <button type="button" className="btn btn-ghost" onClick={() => setShowModal(false)}>إلغاء</button>
                 <button type="submit" className="btn btn-primary" disabled={submitting}>حفظ</button>
@@ -213,7 +195,7 @@ export default function NotesPage() {
       )}
 
       {confirmDelete && (
-        <ConfirmModal title="حذف الملاحظة" message="هل أنت متأكد من حذف هذه الملاحظة؟" onConfirm={handleDelete} onCancel={() => setConfirmDelete(null)} />
+        <ConfirmModal title="حذف المهمة" message="هل أنت متأكد من حذف هذه المهمة؟" onConfirm={handleDelete} onCancel={() => setConfirmDelete(null)} />
       )}
     </>
   );
